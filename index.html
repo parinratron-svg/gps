@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AR ตามพิกัด · 0214381 Lab 3</title>
+  <!-- โหลด A-Frame และ AR.js ตามลำดับที่ location-based AR ต้องใช้ -->
+  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.8/three.js/build/ar-threex-location-only.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.8/aframe/build/aframe-ar.js"></script>
+  <script>
+    // ให้วัตถุหันหน้าเข้าหาผู้ใช้เสมอ (อ่านป้ายได้จากทุกทิศ)
+    AFRAME.registerComponent('face-me', {
+      tick: function () {
+        const cam = this.el.sceneEl.camera;
+        if (!cam) return;
+        const me = new THREE.Vector3(), target = new THREE.Vector3();
+        this.el.object3D.getWorldPosition(me); cam.getWorldPosition(target);
+        target.y = me.y;                       // หมุนเฉพาะแนวนอน ป้ายไม่เอียงขึ้นลง
+        this.el.object3D.lookAt(target);
+      }
+    });
+  </script>
+  <style>
+    #hud { position: fixed; top: 10px; left: 10px; right: 10px; z-index: 10;
+           background: rgba(42,27,92,.82); color: #fff; border-radius: 12px;
+           padding: 10px 12px; font: 14px/1.5 system-ui, sans-serif; }
+    #hud b { color: #C9B8F0; }
+    #credit { position: fixed; bottom: 8px; left: 10px; z-index: 10;
+              padding: 5px 8px; background: rgba(0,0,0,.55); color: #fff;
+              border-radius: 6px; font: 11px/1.4 system-ui, sans-serif; }
+    #credit a { color: #fff; }
+  </style>
+</head>
+<body style="margin: 0; overflow: hidden;">
+  <div id="hud">กำลังขอตำแหน่ง GPS…</div>
+  <div id="credit">โมเดล: <a href="https://sketchfab.com/3d-models/3d-anime-character-girl-for-blender-906b6874327844de9f794c7986127f3f" target="_blank" rel="noopener">3D Anime Character girl for Blender</a> by CGBlender · CC BY 4.0</div>
+
+  <a-scene vr-mode-ui="enabled: false"
+           arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false"
+           renderer="antialias: true; alpha: true">
+
+    <a-assets timeout="15000">
+      <a-asset-item id="standing-character-asset" src="models/3d_anime_character_girl_for_blender.glb"></a-asset-item>
+    </a-assets>
+
+    <!-- กล้องที่รู้ตำแหน่ง GPS ของผู้ใช้ · gpsMinDistance = ขยับเกินกี่เมตรจึงอัปเดตตำแหน่ง -->
+    <a-camera gps-new-camera="gpsMinDistance: 5; positionMinAccuracy: 200"></a-camera>
+
+    <!-- หน่วยของขนาดในโหมดนี้คือ "เมตรจริง" วัตถุที่อยู่ห่าง 30 เมตรจึงต้องใหญ่หลายเมตรถึงจะเห็นชัด
+         ค่าเริ่มต้นวางจุดไว้รอบพิกัด 0, 0 เพื่อให้ทดลองโหมดจำลอง (?sim) ได้ทันที -->
+
+    <!-- จุดจะถูกปักรอบพิกัด GPS แรกของเครื่อง แล้วคงที่จนกว่าจะเปิดหน้าใหม่ -->
+    <a-entity data-name="จุด A" data-offset-north="10" data-offset-east="0" visible="false">
+      <a-entity face-me gltf-model="#standing-character-asset" scale="1 1 1"></a-entity>
+    </a-entity>
+    <a-entity data-name="จุด B" data-offset-north="0" data-offset-east="20" visible="false">
+      <a-entity face-me gltf-model="#standing-character-asset" scale="1 1 1"></a-entity>
+    </a-entity>
+    <a-entity data-name="จุด C" data-offset-north="-30" data-offset-east="0" visible="false">
+      <a-entity face-me gltf-model="#standing-character-asset" scale="1 1 1"></a-entity>
+    </a-entity>
+
+  </a-scene>
+
+  <script>
+    // โหมดจำลอง: เปิดลิงก์แล้วต่อท้ายด้วย ?sim จะ "ยืน" ห่างจุด A ไปทางใต้ประมาณ 33 เมตร (ใช้ในห้องหรือบนคอมพิวเตอร์)
+    const SIM = new URLSearchParams(location.search).has('sim');
+    const hud = document.getElementById('hud');
+    const scene = document.querySelector('a-scene');
+    const cam = document.querySelector('[gps-new-camera]');
+    const places = [...document.querySelectorAll('[data-name]')];
+    let me = null, accuracy = null;
+    let sceneOriginSet = false;
+    let placesInitialized = false;
+
+    function placeAround(latitude, longitude) {
+      const metersPerDegree = 111320;
+      const metersPerLongitudeDegree = metersPerDegree * Math.max(
+        Math.cos(latitude * Math.PI / 180), 0.000001
+      );
+      places.forEach(place => {
+        const north = Number(place.dataset.offsetNorth || 0);
+        const east = Number(place.dataset.offsetEast || 0);
+        place.setAttribute('gps-new-entity-place', {
+          latitude: latitude + north / metersPerDegree,
+          longitude: longitude + east / metersPerLongitudeDegree
+        });
+        place.setAttribute('visible', true);
+      });
+      placesInitialized = true;
+    }
+
+    scene.addEventListener('loaded', () => {
+      if (SIM) {
+        hud.textContent = 'กำลังเริ่มโหมดจำลอง…';
+        setTimeout(() => {
+          placesInitialized = false;
+          cam.setAttribute('gps-new-camera', {
+            simulateLatitude: 0, simulateLongitude: 0.000001
+          });
+        }, 500);
+      }
+    });
+    cam.addEventListener('gps-camera-update-position', e => {
+      me = e.detail.position;
+      if (!SIM) {
+        if (!sceneOriginSet) {
+          const [x, z] = cam.components['gps-new-camera'].latLonToWorld(me.latitude, me.longitude);
+          scene.object3D.position.set(-x, 0, -z);
+          sceneOriginSet = true;
+        }
+      }
+      if (!placesInitialized) placeAround(me.latitude, me.longitude);
+    });
+
+    // อ่านความแม่นยำของ GPS (± เมตร) เพื่อจดลงใบงาน
+    if (!SIM && !window.isSecureContext) {
+      hud.textContent = 'GPS ใช้ไม่ได้: กรุณาเปิดเว็บผ่าน HTTPS (หรือ localhost) แล้วอนุญาตตำแหน่ง';
+    } else if (!SIM && !navigator.geolocation) {
+      hud.textContent = 'เบราว์เซอร์นี้ไม่รองรับ GPS กรุณาเปิดด้วย Chrome หรือ Safari รุ่นล่าสุด';
+    } else if (!SIM) {
+      navigator.geolocation.watchPosition(p => {
+        accuracy = p.coords.accuracy;
+        me = { latitude: p.coords.latitude, longitude: p.coords.longitude };
+      }, e => {
+        const messages = {
+          1: 'ไม่ได้รับอนุญาตตำแหน่ง กรุณาเปิดการอนุญาต Location ในการตั้งค่าเว็บไซต์',
+          2: 'หา GPS ไม่พบ กรุณาเปิด Location ของเครื่องและลองออกไปที่โล่ง',
+          3: 'รอ GPS นานเกินไป กรุณาออกไปที่โล่งแล้วยืนรอสักครู่'
+        };
+        hud.textContent = `GPS ใช้ไม่ได้: ${messages[e.code] || 'ตรวจสอบการตั้งค่าตำแหน่งของเครื่องและเบราว์เซอร์'}`;
+      }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+    }
+
+    setInterval(() => {
+      if (!me) return;
+      const acc = SIM ? 'โหมดจำลอง' : (accuracy ? '± ' + Math.round(accuracy) + ' ม.' : '…');
+      const rows = places.map(p => {
+        const component = p.components['gps-new-entity-place'];
+        const d = component && component.distance;
+        return `${p.dataset.name}: <b>${d === undefined ? '…' : Math.round(d) + ' ม.'}</b>`;
+      }).join(' · ');
+      hud.innerHTML = `ฉันอยู่ที่ ${me.latitude.toFixed(6)}, ${me.longitude.toFixed(6)} · ความแม่นยำ <b>${acc}</b><br>${rows}`;
+    }, 1000);
+  </script>
+</body>
+</html>
